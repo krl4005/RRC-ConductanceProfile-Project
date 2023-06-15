@@ -1,9 +1,12 @@
+#%%
 # IMPORT FUNCTIONS
 import myokit
 import numpy as np
 import pandas as pd
 from itertools import groupby
 from operator import itemgetter
+from scipy import stats
+from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
 # DEFINE FUNCTIONS
 def get_ind(vals = [1,1,1,1,1,1,1,1,1,1], celltype = 'adult'):
@@ -364,3 +367,61 @@ def detect_abnormal_ap(t, v):
 
 def closest(lst, K): 
     return lst[min(range(len(lst)), key = lambda i: abs(lst[i]-K))]
+
+def add_scalebar(axs, section, y_pos = -0.1):
+    # FORMAT X AXIS
+    if section == 0:
+        xmin, xmax, ymin, ymax = axs.axis()
+        scalebar = AnchoredSizeBar(axs.transData, 100, '100 ms', 'lower left', bbox_to_anchor = (0,y_pos), bbox_transform =axs.transAxes, pad=0.5, color='black', frameon=False, size_vertical=(ymax-ymin)*0.0001) #fontproperties=fontprops
+        axs.add_artist(scalebar)
+        axs.spines[['bottom']].set_visible(False)
+        axs.tick_params(bottom=False)
+        axs.tick_params(labelbottom=False)
+    else:
+        for i in list(range(0, len(section))):
+            xmin, xmax, ymin, ymax = axs[section[i][0], section[i][1]].axis()
+            scalebar = AnchoredSizeBar(axs[section[i][0], section[i][1]].transData, 100, '100 ms', 'lower left', bbox_to_anchor = (0,-0.2), bbox_transform =axs[section[i][0], section[i][1]].transAxes, pad=0.5, color='black', frameon=False, size_vertical=(ymax-ymin)*0.0001) #fontproperties=fontprops
+            axs[section[i][0], section[i][1]].add_artist(scalebar)
+            axs[section[i][0], section[i][1]].spines[['bottom']].set_visible(False)
+            axs[section[i][0], section[i][1]].tick_params(bottom=False)
+            axs[section[i][0], section[i][1]].tick_params(labelbottom=False)
+
+def new_parameter_convergence(all_trials, fitness='fitness'):
+    all_dicts = []
+
+    
+    for t in list(range(0, max(all_trials['trial']))):
+        old_data = all_trials[(all_trials['trial']==t) & (all_trials['gen']==0)].sort_values(fitness).iloc[0:100]
+        for g in list(range(0, max(all_trials[(all_trials['trial']==t)]['gen']))):
+            data = all_trials[(all_trials['trial']==t) & (all_trials['gen']==g)].sort_values(fitness).iloc[0:100]
+            data = pd.concat([old_data, data])
+            data = data.drop_duplicates(subset=data.filter(like='multiplier').columns.to_list())
+            data_var = data.sort_values(fitness).iloc[0:100].filter(like = 'multiplier').var().to_dict()
+            data_var['generation'] = g
+            data_var['trial'] = t
+            all_dicts.append(data_var)
+            old_data = data
+
+    df_dicts = pd.DataFrame(all_dicts)
+
+    average_dicts = []
+    for g in list(range(0, max(df_dicts['generation']))):
+        average_dicts.append(df_dicts[df_dicts['generation']==g].mean().to_dict())
+    df_dicts_average = pd.DataFrame(average_dicts)
+    
+    return df_dicts_average
+
+def get_sensitivities(all_trials, error):
+    population = all_trials[all_trials['gen']==0].sort_values(error) 
+    good_pop = population.iloc[0:160] #top 10% of the population
+    bad_pop = population.iloc[160:len(population['gen'])] #remaining 90% of the population
+
+    sensitivities = []
+    pvalues = []
+    for cond in good_pop.filter(like='multiplier').columns.to_list():
+        stat, pvalue = stats.ks_2samp(good_pop[cond], bad_pop[cond])
+        sensitivities.append(stat)
+        pvalues.append(pvalue)
+    return sensitivities, pvalues
+
+# %%

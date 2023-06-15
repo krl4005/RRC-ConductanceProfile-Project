@@ -16,7 +16,7 @@
 ***figures/*** - *a folder containing all the main and supplimentary figures included in the manuscript. Each figure is saved as both .png and .pdf files.* 
 
 ***data/*** - *A folder where all required data for analysis and figure production is kept. This folder contains 7 data files:*
-* **all_data.csv.gz** is a compressed dataframe which contains conductance, cost, and RRC data for every individual from all eight GA runs. The GA trial and generation is marked for each and the ToR-ORd model was used for all simulations. 
+* **all_data.csv.gz** is a compressed dataframe which contains conductance, cost, and RRC data for every individual from all eight GA runs. The GA trial and generation is marked for each and the ToR-ORd model was used for all simulations. The RRC values in this file are off since the stimulus amplitude was set to -10 in line 59 of tor_ord_endo2.mmt. In order to correct for this every RRC was multiplied by the stimulus amplitude to correct for this in figure production and analysis for both the ToR-ORd and Grandi Models. 
 * **APbounds.csv** is the upper and lower bound data used to assess action potential morphology point by point after upstroke. 
 * **baseline_torord_data.csv** is a dataframe containing time and voltage data to produce the baseline ToR-ORd model used in this study. 
 * **best_data.csv** is a dataframe containing the same information as all_data.csv.gz but only for the 220 best individuals. These all satisfy physiologic constraints and have a cost lower than 2800.
