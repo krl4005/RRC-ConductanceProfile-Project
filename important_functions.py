@@ -7,6 +7,7 @@ from itertools import groupby
 from operator import itemgetter
 from scipy import stats
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
+import matplotlib.pyplot as plt
 
 # DEFINE FUNCTIONS
 def get_ind(vals = [1,1,1,1,1,1,1,1,1,1], celltype = 'adult'):
@@ -18,7 +19,7 @@ def get_ind(vals = [1,1,1,1,1,1,1,1,1,1], celltype = 'adult'):
         ind = dict(zip(tunable_parameters, vals))
     return(ind)
 
-def run_model(ind, beats, stim = 5.3, stim_1 = 0, start = 0.1, start_1 = 0, length = 1, length_1 = 0, cl = 1000, prepace = 600, I0 = 0, path = '../', model = 'tor_ord_endo2.mmt'): 
+def run_model(ind, beats, stim = 5.3, stim_1 = 0, start = 0.1, start_1 = 0, length = 1, length_1 = 0, cl = 1000, prepace = 600, I0 = 0, path = './models/', model = 'tor_ord_endo2.mmt'): 
     mod, proto = get_ind_data(ind, path, model = model)
     proto.schedule(stim, start, length, cl, 0) 
     if stim_1 != 0:
@@ -34,7 +35,7 @@ def run_model(ind, beats, stim = 5.3, stim_1 = 0, start = 0.1, start_1 = 0, leng
 
     return(dat, IC) 
 
-def rrc_search(ind, IC, path = '../', model = 'tor_ord_endo2.mmt'):
+def rrc_search(ind, IC, path = './models/', model = 'tor_ord_endo2.mmt'):
     all_data = []
     APs = list(range(10004, 100004, 5000))
 
@@ -218,7 +219,7 @@ def get_features(t,v,cai=None):
 
     return ap_features
 
-def check_physio_torord(t, v, path = '../', filter = 'no'):
+def check_physio_torord(t, v, filter = 'no'):
 
     # Cut off the upstroke of the AP for profile
     t_ind = list(t[150:len(t)]) 
@@ -310,7 +311,7 @@ def calc_APD(t, v, apd_pct):
 
     return(apd_val) 
 
-def get_ind_data(ind, path = '../', model = 'tor_ord_endo2.mmt'):
+def get_ind_data(ind, path = './models/', model = 'tor_ord_endo2.mmt'):
     mod, proto, x = myokit.load(path+model)
     if ind is not None:
         for k, v in ind[0].items():
@@ -424,4 +425,52 @@ def get_sensitivities(all_trials, error):
         pvalues.append(pvalue)
     return sensitivities, pvalues
 
-# %%
+def check_robustness(best_data, conductance, values, i_kb = 1):
+    
+    all_data = []
+
+    for value in values:
+        if i_kb != 1:
+            conductance_label = conductance + ' and i_kb_multiplier'
+        else:
+            conductance_label = conductance
+
+        # baseline torord model 
+        dat, IC = run_model([{conductance: value, 'i_kb_multiplier': i_kb}], 1)
+        t = dat['engine.time']
+        v = dat['membrane.v']
+        apd90 = calc_APD(t, v, 90)
+        data = detect_abnormal_ap(t, v)
+        result = data['result']
+        labels = ['conductance', 'value', 't', 'v', 'apd90', 'result', 'type']
+        all_data.append(dict(zip(labels, [conductance_label, value, t, v, apd90, result, 'torord'])))
+
+        # best ind
+        best_ind = best_data.filter(like = 'multiplier').iloc[0].to_dict()
+        best_ind['i_kb_multiplier'] = i_kb
+        best_ind[conductance] = best_ind[conductance]*value
+        best_dat, best_IC = run_model([best_ind], 1)
+        t_best = best_dat['engine.time']
+        v_best = best_dat['membrane.v']
+        apd90_best = calc_APD(t_best, v_best, 90)
+        data_best = detect_abnormal_ap(t_best, v_best)
+        result_best = data_best['result']
+        all_data.append(dict(zip(labels, [conductance_label, value, t_best, v_best, apd90_best, result_best, 'optimized'])))
+
+    return(all_data)
+
+def collect_rrc_data(args):
+    i, best_conds, stims = args
+    ind_data = {}
+    ind = best_conds.filter(like= 'multiplier').iloc[i].to_dict()
+    for s in list(range(0, len(stims))):
+        dat, IC = run_model([ind], 1, stim = 5.3, stim_1 = stims[s], start = 0.1, start_1 = 4, length = 1, length_1 = 996, cl = 1000, prepace = 600, I0 = 0, path = './models/', model = 'tor_ord_endo2.mmt') 
+        ind_data['t_'+str(stims[s])] = [dat['engine.time'].tolist()]
+        ind_data['v_'+str(stims[s])] = [dat['membrane.v'].tolist()]
+        ind_data['apd_'+str(stims[s])] = calc_APD(dat['engine.time'], dat['membrane.v'], 90)
+        if s == 0:
+            base_apd = calc_APD(dat['engine.time'], dat['membrane.v'], 90)
+        ind_data['delapd_'+str(stims[s])] = calc_APD(dat['engine.time'], dat['membrane.v'], 90) - base_apd
+        
+    data = {**ind, **ind_data}
+    return data

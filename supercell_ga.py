@@ -1,20 +1,30 @@
-# IMPORT FUNCTIONS
+"""Runs a genetic algorithm for parameter tuning to develop a Super cell.
+   This is unique because it updates the RRC code to incldue the protocol with 
+   4 beats in between each stimulus as is done in the guar paper. 
+"""
+#%%
 import random
 from math import log10
 from multiprocessing import Pool
 import numpy as np
 import pandas as pd
-from deap import base, creator, tools
-import time
-from important_functions import get_last_ap, check_physio, rrc_search, get_rrc_error, get_features, check_physio_torord, run_model
+import pickle
 
-# DEFINE GA_CONFIG CLASS
+from deap import base, creator, tools # pip install deap
+
+import time
+from important_functions import get_last_ap, get_ind_data, get_normal_sim_dat, check_physio, rrc_search, get_rrc_error, get_features, check_physio_torord, run_model
+
+print(pd.__version__)
+
 class Ga_Config():
     def __init__(self,
              population_size,
              max_generations,
              params_lower_bound,
              params_upper_bound,
+             iks_lower_bound,
+             iks_upper_bound,
              tunable_parameters,
              mate_probability,
              mutate_probability,
@@ -26,11 +36,15 @@ class Ga_Config():
              feature_targets,
              save_data_to,
              path_to_model,
+             model_stim,
+             model_length,
              model):
         self.population_size = population_size
         self.max_generations = max_generations
         self.params_lower_bound = params_lower_bound
         self.params_upper_bound = params_upper_bound
+        self.iks_lower_bound = iks_lower_bound
+        self.iks_upper_bound = iks_upper_bound
         self.tunable_parameters = tunable_parameters
         self.mate_probability = mate_probability
         self.mutate_probability = mutate_probability
@@ -42,9 +56,10 @@ class Ga_Config():
         self.feature_targets = feature_targets
         self.save_data_to = save_data_to
         self.path_to_model = path_to_model
+        self.model_stim = model_stim
+        self.model_length = model_length
         self.model = model
 
-# DEFINE GA FUNCTIONS
 def run_ga(toolbox):
     """
     Runs an instance of the genetic algorithm.
@@ -53,6 +68,7 @@ def run_ga(toolbox):
         final_population : List[Individuals]
     """
     print('Evaluating initial population.')    
+    #cols = ['gen'] + GA_CONFIG.tunable_parameters + ['fitness', 'rrc', 'rrc_error', 't', 'v', 'cai','total_feature_error', 'total_morph_error', 'feature_error_AP1', 'feature_error_AP2', 'feature_error_AP3', 'feature_error_AP4', 'morph_error_AP1', 'morph_error_AP2', 'morph_error_AP3', 'morph_error_AP4', 'Vm_peak_AP1', 'dvdt_max_AP1', 'apd40_AP1', 'apd50_AP1', 'apd90_AP1', 'triangulation_AP1', 'RMP_AP1', 'cat_amp_AP1', 'cat_peak_AP1', 'cat90_AP1', 'Vm_peak_AP2', 'dvdt_max_AP2', 'apd40_AP2', 'apd50_AP2', 'apd90_AP2', 'triangulation_AP2', 'RMP_AP2', 'cat_amp_AP2', 'cat_peak_AP2', 'cat90_AP2', 'Vm_peak_AP3', 'dvdt_max_AP3', 'apd40_AP3', 'apd50_AP3', 'apd90_AP3', 'triangulation_AP3', 'RMP_AP3', 'cat_amp_AP3', 'cat_peak_AP3', 'cat90_AP3', 'Vm_peak_AP4', 'dvdt_max_AP4', 'apd40_AP4', 'apd50_AP4', 'apd90_AP4', 'triangulation_AP4', 'RMP_AP4', 'cat_amp_AP4', 'cat_peak_AP4', 'cat90_AP4']
     cols = ['gen'] + GA_CONFIG.tunable_parameters + ['fitness', 'rrc', 'rrc_error', 't', 'v', 'cai','total_feature_error', 'total_morph_error', 'feature_error_AP4', 'morph_error_AP4', 'Vm_peak_AP4', 'dvdt_max_AP4', 'apd40_AP4', 'apd50_AP4', 'apd90_AP4', 'triangulation_AP4', 'RMP_AP4', 'cat_amp_AP4', 'cat_peak_AP4', 'cat90_AP4']
 
     # 3. Calls _initialize_individuals and returns initial population
@@ -74,9 +90,10 @@ def run_ga(toolbox):
     print(f'\tBest fitness is {np.min(gen_fitnesses)}')
 
     ## BELOW INCLUDES CODE TO SAVE SPECIFIC VARIABLES AS THE GA LOOPS
+    # Store initial population details for result processing.
     final_population = [population]
     df_info = pd.DataFrame(info, columns = cols)
-    df_info.to_csv(GA_CONFIG.save_data_to+'data.csv', index=False)
+    df_info.to_csv(GA_CONFIG.save_data_to+'info.csv', index=False)
 
     for generation in range(1, GA_CONFIG.max_generations):
         old_population = population
@@ -121,6 +138,7 @@ def run_ga(toolbox):
             info.append(ind_info) 
 
         population = offspring
+        #print('final population', population)
 
         gen_fitnesses = [ind.fitness.values[0] for ind in population]
 
@@ -133,6 +151,7 @@ def run_ga(toolbox):
         final_population.append(population)
 
         ## BELOW INCLUDES CODE TO SAVE SPECIFIC VARIABLES AS THE GA LOOPS
+
         for i in list(range(0, GA_CONFIG.population_size)):
             if updated_idx.count(i) == 0:
                 for x in list(range(0, len(old_population))):
@@ -140,10 +159,10 @@ def run_ga(toolbox):
                         idx = x
                 info.insert(i, [generation]+old_info[idx][1:len(old_info[idx])]) 
         
-        #SAVE POP AND GEN AS GA LOOPS
+        #Save pop and gen as ga loops 
         new_info = pd.DataFrame(info, columns = cols)
         df_info = df_info.append(new_info, ignore_index=True)
-        df_info.to_csv(GA_CONFIG.save_data_to+'data.csv', index=False)
+        df_info.to_csv(GA_CONFIG.save_data_to+'info.csv', index=False)
         
         print('Finished saving generation')
 
@@ -159,7 +178,17 @@ def _initialize_individuals():
     # Builds a list of parameters using random upper and lower bounds.
     lower_exp = log10(GA_CONFIG.params_lower_bound)
     upper_exp = log10(GA_CONFIG.params_upper_bound)
+
+    #iks_lower_exp = log10(GA_CONFIG.iks_lower_bound)
+    #iks_upper_exp = log10(GA_CONFIG.iks_upper_bound)
     initial_params = [10**random.uniform(lower_exp, upper_exp) for i in range(0, len(GA_CONFIG.tunable_parameters))]
+
+    #initial_params = []
+    #for i in range(0, len(GA_CONFIG.tunable_parameters)):
+    #    if i == 1: #increase bounds for iks to try to allow for better convergence 
+    #        initial_params.append(10**random.uniform(iks_lower_exp, iks_upper_exp))
+    #    else:
+    #        initial_params.append(10**random.uniform(lower_exp, upper_exp))
 
     keys = [val for val in GA_CONFIG.tunable_parameters]
     return dict(zip(keys, initial_params))
@@ -191,16 +220,28 @@ def _mutate(individual):
     keys = [k for k, v in individual[0].items()]
 
     for key in keys:
-        if random.random() < GA_CONFIG.gene_mutation_probability:
-            new_param = -1
+        if key == 'i_ks_multiplier':
+            if random.random() < GA_CONFIG.gene_mutation_probability:
+                new_param = -1
 
-            while ((new_param < GA_CONFIG.params_lower_bound) or
-                (new_param > GA_CONFIG.params_upper_bound)):
-                new_param = np.random.normal(
-                        individual[0][key],
-                        individual[0][key] * .1)
+                while ((new_param < GA_CONFIG.iks_lower_bound) or
+                    (new_param > GA_CONFIG.iks_upper_bound)):
+                    new_param = np.random.normal(
+                            individual[0][key],
+                            individual[0][key] * .1)
 
-            individual[0][key] = new_param
+                individual[0][key] = new_param
+        else:
+            if random.random() < GA_CONFIG.gene_mutation_probability:
+                new_param = -1
+
+                while ((new_param < GA_CONFIG.params_lower_bound) or
+                    (new_param > GA_CONFIG.params_upper_bound)):
+                    new_param = np.random.normal(
+                            individual[0][key],
+                            individual[0][key] * .1)
+
+                individual[0][key] = new_param
 
 def _evaluate_fitness(ind):
 
@@ -208,7 +249,7 @@ def _evaluate_fitness(ind):
     all_features = []
     all_feature_errors = []
     all_morph_errors = []
-    dat, IC = run_model(ind, beats, prepace = 600, path = GA_CONFIG.path_to_model, model = GA_CONFIG.model)
+    dat, IC = run_model(ind, beats, prepace = 600, stim = GA_CONFIG.model_stim, length = GA_CONFIG.model_length, path = GA_CONFIG.path_to_model, model = GA_CONFIG.model)
 
     for i in list(range(0, beats-1)):
         data = get_last_ap(dat, i)
@@ -233,10 +274,11 @@ def _evaluate_fitness(ind):
     
     fitness = sum(all_feature_errors) + sum(all_morph_errors) + rrc_fitness
 
+    #data = [fitness, RRC, rrc_fitness, str(list(dat['engine.time'])), str(list(dat['membrane.v'])), str(list(dat['intracellular_ions.cai'])), sum(all_feature_errors), sum(all_morph_errors)] + all_feature_errors + all_morph_errors + list(all_features[0].values()) + list(all_features[1].values()) + list(all_features[2].values()) + list(all_features[3].values()) 
     data = [fitness, RRC, rrc_fitness, str(list(data['t'])), str(list(data['v'])), str(list(data['cai'])), sum(all_feature_errors), sum(all_morph_errors), feature_error, AP_morph_error['error']] + list(ap_features.values()) 
     return data
 
-def start_ga(pop_size=200, max_generations=100, physio_cost = 'function_1', rrc_cost = 'function_1', save_data_to = './', path_to_model = './', model = 'tor_ord_endo2.mmt', multithread = 'yes', tunable_parameters = ['i_cal_pca_multiplier', 'i_ks_multiplier', 'i_kr_multiplier', 'i_nal_multiplier', 'i_na_multiplier', 'i_to_multiplier', 'i_k1_multiplier', 'i_NCX_multiplier', 'i_nak_multiplier']):
+def start_ga(pop_size=200, max_generations=100, physio_cost = 'function_2', rrc_cost = 'function_1', save_data_to = './', path_to_model = './', model = 'tor_ord_endo2.mmt', model_stim = 5.3, model_length = 1, multithread = 'yes', tunable_parameters = ['i_cal_pca_multiplier', 'i_ks_multiplier', 'i_kr_multiplier', 'i_nal_multiplier', 'i_na_multiplier', 'i_to_multiplier', 'i_k1_multiplier', 'i_NCX_multiplier', 'i_nak_multiplier']):
     feature_targets = {'Vm_peak': [10, 33, 55],
                        'dvdt_max': [100, 347, 1000],
                        'cat_amp': [3E-4*1e5, 3.12E-4*1e5, 8E-4*1e5],
@@ -249,6 +291,8 @@ def start_ga(pop_size=200, max_generations=100, physio_cost = 'function_1', rrc_
                           max_generations=max_generations,
                           params_lower_bound=0.33,
                           params_upper_bound=3,
+                          iks_lower_bound = 0.33,
+                          iks_upper_bound = 3,
                           tunable_parameters= tunable_parameters,
                           mate_probability=0.9,
                           mutate_probability=0.9,
@@ -260,6 +304,8 @@ def start_ga(pop_size=200, max_generations=100, physio_cost = 'function_1', rrc_
                           feature_targets=feature_targets,
                           save_data_to=save_data_to,
                           path_to_model=path_to_model,
+                          model_length=model_length,
+                          model_stim=model_stim,
                           model = model)
 
     creator.create('FitnessMin', base.Fitness, weights=(-1.0,))
